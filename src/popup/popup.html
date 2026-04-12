@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VK Voice Downloader</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body class="popup-body">
+    <main class="popup">
+      <h1 class="popup__title">VK Voice Downloader</h1>
+      <section class="popup__card">
+        <div class="popup__copy">
+          <strong>Скачивание</strong>
+          <span>Кнопки на страницах vk.com</span>
+        </div>
+        <label class="toggle" aria-label="Переключить расширение">
+          <input id="enabledToggle" type="checkbox">
+          <span class="toggle__slider"></span>
+        </label>
+      </section>
+      <p id="status" class="popup__status" aria-live="polite">Состояние загружается...</p>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>

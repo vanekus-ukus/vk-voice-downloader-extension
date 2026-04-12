@@ -1,0 +1,20 @@
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editors
+.idea/
+.vscode/
+
+# Logs and local artifacts
+*.log
+*.tmp
+*.bak
+
+# Packages / archives
+*.zip
+*.crx
+*.pem
+
+# Dependency directories
+node_modules/

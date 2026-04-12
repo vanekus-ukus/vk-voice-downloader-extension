@@ -1,0 +1,60 @@
+{
+  "manifest_version": 3,
+  "name": "VK Voice Downloader",
+  "version": "1.0.0",
+  "description": "Добавляет кнопку скачивания к голосовым сообщениям VK, извлекая ссылки из данных React Fiber.",
+  "icons": {
+    "16": "assets/icons/icon16.png",
+    "32": "assets/icons/icon32.png",
+    "48": "assets/icons/icon48.png",
+    "128": "assets/icons/icon128.png"
+  },
+  "permissions": [
+    "downloads",
+    "scripting",
+    "storage"
+  ],
+  "host_permissions": [
+    "*://vk.com/*",
+    "*://*.vk.com/*"
+  ],
+  "background": {
+    "service_worker": "src/background/service-worker.js"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "assets/ui/download-icon.svg"
+      ],
+      "matches": [
+        "*://vk.com/*",
+        "*://*.vk.com/*"
+      ]
+    }
+  ],
+  "action": {
+    "default_icon": {
+      "16": "assets/icons/icon16.png",
+      "32": "assets/icons/icon32.png",
+      "48": "assets/icons/icon48.png",
+      "128": "assets/icons/icon128.png"
+    },
+    "default_title": "VK Voice Downloader",
+    "default_popup": "src/popup/popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://vk.com/*",
+        "*://*.vk.com/*"
+      ],
+      "js": [
+        "src/content/content-script.js"
+      ],
+      "css": [
+        "src/content/content.css"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}
