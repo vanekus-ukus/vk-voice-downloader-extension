@@ -1,5 +1,5 @@
 const STORAGE_KEY = "enabled";
-const LOG_PREFIX = "[VK Voice Downloader]";
+const LOG_PREFIX = "[VK Voice & Clips Downloader]";
 
 function updateStatus(statusElement, enabled) {
   statusElement.textContent = enabled ? "Расширение включено." : "Расширение выключено.";

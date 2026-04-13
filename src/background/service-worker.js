@@ -1,5 +1,5 @@
 const DEBUG = false;
-const LOG_PREFIX = "[VK Voice Downloader]";
+const LOG_PREFIX = "[VK Voice & Clips Downloader]";
 const STORAGE_KEY = "enabled";
 
 function debug(...args) {
@@ -32,11 +32,23 @@ function formatTimestamp(date) {
   ].join("");
 }
 
-function inferFallbackExtension(data) {
+function inferVoiceFallbackExtension(data) {
   return data?.sourceType === "linkMp3" ? "mp3" : "ogg";
 }
 
-function sanitizeDownloadFilename(filename, extension) {
+function inferClipFallbackExtension(data) {
+  if (data?.sourceType === "hls") {
+    return "m3u8";
+  }
+
+  if (data?.sourceType === "dash_sep") {
+    return "mpd";
+  }
+
+  return "mp4";
+}
+
+function sanitizeDownloadFilename(filename, extension, fallbackPrefix) {
   const normalized = String(filename || "")
     .replace(/[<>:"/\\|?*\u0000-\u001F]+/g, "-")
     .replace(/\s+/g, " ")
@@ -48,7 +60,7 @@ function sanitizeDownloadFilename(filename, extension) {
     return normalized;
   }
 
-  return `vk-voice-${formatTimestamp(new Date())}.${extension}`;
+  return `${fallbackPrefix}-${formatTimestamp(new Date())}.${extension}`;
 }
 
 function isAllowedDownloadUrl(rawUrl) {
@@ -63,7 +75,7 @@ function isAllowedDownloadUrl(rawUrl) {
 function extractVoiceDataInMainWorld(nodeToken) {
   const ROOT_SELECTOR = ".AttachVoice";
   const PLAYER_SELECTOR = ".AttachVoice__player";
-  const NODE_TOKEN_ATTR = "data-vkvd-token";
+  const NODE_TOKEN_ATTR = "data-vkvd-voice-token";
   const MAX_FIBER_STEPS = 10;
   const MAX_ANCESTOR_STEPS = 5;
   const MAX_DESCENDANT_SCAN = 80;
@@ -326,7 +338,379 @@ function extractVoiceDataInMainWorld(nodeToken) {
   };
 }
 
-function executeMainWorldExtraction(tabId, token) {
+function extractClipDataInMainWorld(nodeToken) {
+  const ROOT_SELECTOR = '[data-testid="clips-feed-item"]';
+  const NODE_TOKEN_ATTR = "data-vkvd-clip-token";
+  const MAX_FIBER_STEPS = 10;
+  const MAX_ANCESTOR_STEPS = 5;
+  const MAX_DESCENDANT_SCAN = 80;
+  const MAX_SCAN_DEPTH = 6;
+  const MAX_SCAN_OBJECTS = 140;
+
+  function getReactFiberKey(node) {
+    if (!node) {
+      return null;
+    }
+
+    const keys = new Set([
+      ...Object.keys(node),
+      ...Object.getOwnPropertyNames(node)
+    ]);
+
+    for (const key of keys) {
+      if (typeof key === "string" && (key.startsWith("__reactFiber$") || key.startsWith("__reactContainer$"))) {
+        return key;
+      }
+    }
+
+    return null;
+  }
+
+  function getReactPropsKey(node) {
+    if (!node) {
+      return null;
+    }
+
+    const keys = new Set([
+      ...Object.keys(node),
+      ...Object.getOwnPropertyNames(node)
+    ]);
+
+    for (const key of keys) {
+      if (typeof key === "string" && key.startsWith("__reactProps$")) {
+        return key;
+      }
+    }
+
+    return null;
+  }
+
+  function getReactInternals(node) {
+    const fiberKey = getReactFiberKey(node);
+    const propsKey = getReactPropsKey(node);
+
+    return {
+      fiber: fiberKey ? node[fiberKey] : null,
+      props: propsKey ? node[propsKey] : null
+    };
+  }
+
+  function collectCandidateNodes(node) {
+    if (!(node instanceof Element)) {
+      return [];
+    }
+
+    const nodes = new Set();
+    const addNode = (candidate) => {
+      if (candidate instanceof Element) {
+        nodes.add(candidate);
+      }
+    };
+
+    addNode(node);
+
+    try {
+      const walker = document.createTreeWalker(node, NodeFilter.SHOW_ELEMENT);
+      let current = walker.nextNode();
+      let scanned = 0;
+
+      while (current && scanned < MAX_DESCENDANT_SCAN) {
+        addNode(current);
+        current = walker.nextNode();
+        scanned += 1;
+      }
+    } catch {
+      // Best-effort traversal only.
+    }
+
+    let parent = node.parentElement;
+    let depth = 0;
+
+    while (parent && depth < MAX_ANCESTOR_STEPS) {
+      addNode(parent);
+      parent = parent.parentElement;
+      depth += 1;
+    }
+
+    return [...nodes];
+  }
+
+  function getValueByPath(root, path) {
+    let current = root;
+
+    for (const key of path) {
+      if (current === null || current === undefined) {
+        return null;
+      }
+
+      current = current[key];
+    }
+
+    return current;
+  }
+
+  function isClipVideoCandidate(value) {
+    return Boolean(
+      value &&
+      typeof value === "object" &&
+      value.files &&
+      typeof value.files === "object" &&
+      (value.owner_id !== undefined || value.id !== undefined || value.united_video_id !== undefined)
+    );
+  }
+
+  function scanForVideoCandidate(root) {
+    const queue = [{ value: root, depth: 0 }];
+    const seen = new Set();
+    let scanned = 0;
+
+    while (queue.length > 0 && scanned < MAX_SCAN_OBJECTS) {
+      const { value, depth } = queue.shift();
+
+      if (!value || typeof value !== "object" || seen.has(value)) {
+        continue;
+      }
+
+      seen.add(value);
+      scanned += 1;
+
+      if (isClipVideoCandidate(value)) {
+        return value;
+      }
+
+      if (isClipVideoCandidate(value.video)) {
+        return value.video;
+      }
+
+      if (depth >= MAX_SCAN_DEPTH) {
+        continue;
+      }
+
+      const preferredKeys = ["video", "props", "children", "memoizedProps", "pendingProps", "memoizedState", "state", "item"];
+
+      for (const key of preferredKeys) {
+        if (Object.prototype.hasOwnProperty.call(value, key)) {
+          queue.push({ value: value[key], depth: depth + 1 });
+        }
+      }
+
+      if (Array.isArray(value)) {
+        for (let index = 0; index < Math.min(value.length, 8); index += 1) {
+          queue.push({ value: value[index], depth: depth + 1 });
+        }
+
+        continue;
+      }
+
+      const fallbackKeys = Object.keys(value)
+        .filter((key) => /video|clip|props|children|item|data|feed/i.test(key))
+        .slice(0, 12);
+
+      for (const key of fallbackKeys) {
+        queue.push({ value: value[key], depth: depth + 1 });
+      }
+    }
+
+    return null;
+  }
+
+  function extractVideo(container) {
+    if (!container || typeof container !== "object") {
+      return null;
+    }
+
+    const candidatePaths = [
+      ["video"],
+      ["props", "video"],
+      ["children", 0, "props", "children", "props", "video"],
+      ["children", "props", "video"],
+      ["props", "children", "props", "video"],
+      ["props", "children", 0, "props", "children", "props", "video"],
+      ["memoizedProps", "children", 0, "props", "children", "props", "video"],
+      ["pendingProps", "children", 0, "props", "children", "props", "video"]
+    ];
+
+    for (const path of candidatePaths) {
+      const candidate = getValueByPath(container, path);
+
+      if (isClipVideoCandidate(candidate)) {
+        return candidate;
+      }
+    }
+
+    return scanForVideoCandidate(container);
+  }
+
+  function pickBestClipUrl(files) {
+    if (!files || typeof files !== "object") {
+      return null;
+    }
+
+    const mp4Sources = [
+      { key: "mp4_480", quality: "480p", extension: "mp4" },
+      { key: "mp4_360", quality: "360p", extension: "mp4" },
+      { key: "mp4_240", quality: "240p", extension: "mp4" },
+      { key: "mp4_144", quality: "144p", extension: "mp4" }
+    ];
+
+    for (const source of mp4Sources) {
+      const url = files[source.key];
+
+      if (typeof url === "string" && url.trim()) {
+        return {
+          key: source.key,
+          quality: source.quality,
+          sourceType: source.key,
+          extension: source.extension,
+          url,
+          unsupportedStreamFallback: false
+        };
+      }
+    }
+
+    const streamFallbacks = [
+      { key: "hls", extension: "m3u8" },
+      { key: "dash_sep", extension: "mpd" }
+    ];
+
+    for (const fallback of streamFallbacks) {
+      const url = files[fallback.key];
+
+      if (typeof url === "string" && url.trim()) {
+        return {
+          key: fallback.key,
+          quality: null,
+          sourceType: fallback.key,
+          extension: fallback.extension,
+          url,
+          unsupportedStreamFallback: true
+        };
+      }
+    }
+
+    return null;
+  }
+
+  function toClipData(video) {
+    if (!isClipVideoCandidate(video)) {
+      return null;
+    }
+
+    const pickedUrl = pickBestClipUrl(video.files);
+
+    if (!pickedUrl?.url) {
+      return null;
+    }
+
+    return {
+      url: pickedUrl.url,
+      quality: pickedUrl.quality,
+      qualityKey: pickedUrl.key,
+      sourceType: pickedUrl.sourceType,
+      extension: pickedUrl.extension,
+      unsupportedStreamFallback: pickedUrl.unsupportedStreamFallback,
+      ownerId: video.owner_id ?? null,
+      videoId: video.id ?? null,
+      unitedVideoId: video.united_video_id ?? null,
+      files: video.files || null
+    };
+  }
+
+  function getClipPriority(clipData) {
+    switch (clipData?.qualityKey) {
+      case "mp4_480":
+        return 500;
+      case "mp4_360":
+        return 400;
+      case "mp4_240":
+        return 300;
+      case "mp4_144":
+        return 200;
+      case "hls":
+        return 50;
+      case "dash_sep":
+        return 40;
+      default:
+        return 0;
+    }
+  }
+
+  const node =
+    document.querySelector(`${ROOT_SELECTOR}[${NODE_TOKEN_ATTR}="${nodeToken}"]`) ||
+    document.querySelector(`[${NODE_TOKEN_ATTR}="${nodeToken}"]`);
+
+  if (!node) {
+    return {
+      ok: false,
+      error: "Clip node was not found in the page context."
+    };
+  }
+
+  let foundReactInternals = false;
+  let bestClipData = null;
+
+  for (const candidateNode of collectCandidateNodes(node)) {
+    const { fiber, props } = getReactInternals(candidateNode);
+
+    if (!fiber && !props) {
+      continue;
+    }
+
+    foundReactInternals = true;
+
+    const directClipData = toClipData(extractVideo(props));
+
+    if (directClipData && (!bestClipData || getClipPriority(directClipData) > getClipPriority(bestClipData))) {
+      bestClipData = directClipData;
+    }
+
+    let currentFiber = fiber;
+    let currentStep = 0;
+
+    while (currentFiber && currentStep <= MAX_FIBER_STEPS) {
+      const containers = [
+        currentFiber,
+        currentFiber.memoizedProps,
+        currentFiber.pendingProps,
+        currentFiber.memoizedState
+      ];
+
+      for (const container of containers) {
+        const clipData = toClipData(extractVideo(container));
+
+        if (clipData && (!bestClipData || getClipPriority(clipData) > getClipPriority(bestClipData))) {
+          bestClipData = clipData;
+        }
+      }
+
+      if (bestClipData && getClipPriority(bestClipData) >= 500) {
+        return {
+          ok: true,
+          data: bestClipData
+        };
+      }
+
+      currentFiber = currentFiber.return;
+      currentStep += 1;
+    }
+  }
+
+  if (bestClipData) {
+    return {
+      ok: true,
+      data: bestClipData
+    };
+  }
+
+  return {
+    ok: false,
+    error: foundReactInternals
+      ? "Clip video data was not found in nearby React internals."
+      : "React internals were not found near the selected clip node."
+  };
+}
+
+function executeMainWorldExtraction(tabId, token, extractor, missingTokenError) {
   return new Promise((resolve, reject) => {
     if (!tabId) {
       reject(new Error("Tab ID is missing."));
@@ -334,7 +718,7 @@ function executeMainWorldExtraction(tabId, token) {
     }
 
     if (!token) {
-      reject(new Error("Voice node token is missing."));
+      reject(new Error(missingTokenError));
       return;
     }
 
@@ -342,7 +726,7 @@ function executeMainWorldExtraction(tabId, token) {
       {
         target: { tabId },
         world: "MAIN",
-        func: extractVoiceDataInMainWorld,
+        func: extractor,
         args: [token]
       },
       (results) => {
@@ -354,7 +738,7 @@ function executeMainWorldExtraction(tabId, token) {
         const result = results?.[0]?.result;
 
         if (!result?.ok) {
-          reject(new Error(result?.error || "Voice extraction failed."));
+          reject(new Error(result?.error || "Page extraction failed."));
           return;
         }
 
@@ -364,15 +748,14 @@ function executeMainWorldExtraction(tabId, token) {
   });
 }
 
-function downloadVoiceFile(data) {
+function downloadFile(data, extension, fallbackPrefix) {
   return new Promise((resolve, reject) => {
     if (!data?.url || !isAllowedDownloadUrl(data.url)) {
-      reject(new Error("Voice URL is missing or invalid."));
+      reject(new Error("Download URL is missing or invalid."));
       return;
     }
 
-    const extension = inferFallbackExtension(data);
-    const filename = sanitizeDownloadFilename(data.filename, extension);
+    const filename = sanitizeDownloadFilename(data.filename, extension, fallbackPrefix);
 
     chrome.downloads.download(
       {
@@ -393,14 +776,47 @@ function downloadVoiceFile(data) {
   });
 }
 
+function downloadVoiceFile(data) {
+  return downloadFile(data, inferVoiceFallbackExtension(data), "vk-voice");
+}
+
+function downloadClipFile(data) {
+  return downloadFile(data, inferClipFallbackExtension(data), "vk-clip");
+}
+
 async function handleExtractVoiceDataMessage(message, sender) {
-  const data = await executeMainWorldExtraction(sender.tab?.id, message.token);
+  const data = await executeMainWorldExtraction(
+    sender.tab?.id,
+    message.token,
+    extractVoiceDataInMainWorld,
+    "Voice node token is missing."
+  );
+  return { ok: true, data };
+}
+
+async function handleExtractClipDataMessage(message, sender) {
+  const data = await executeMainWorldExtraction(
+    sender.tab?.id,
+    message.token,
+    extractClipDataInMainWorld,
+    "Clip node token is missing."
+  );
   return { ok: true, data };
 }
 
 async function handleDownloadVoiceMessage(message) {
   const downloadId = await downloadVoiceFile(message.data);
-  debug("Download started.", downloadId);
+  debug("Voice download started.", downloadId);
+  return { ok: true, downloadId };
+}
+
+async function handleDownloadClipMessage(message) {
+  if (message.data?.unsupportedStreamFallback) {
+    warn("Clip download falls back to a raw HLS/DASH URL. This is a best-effort download, not an MP4 remux.");
+  }
+
+  const downloadId = await downloadClipFile(message.data);
+  debug("Clip download started.", downloadId);
   return { ok: true, downloadId };
 }
 
@@ -425,9 +841,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const handler =
     message?.type === "extract-voice-data"
       ? () => handleExtractVoiceDataMessage(message, sender)
-      : message?.type === "download-voice"
-        ? () => handleDownloadVoiceMessage(message)
-        : null;
+      : message?.type === "extract-clip-data"
+        ? () => handleExtractClipDataMessage(message, sender)
+        : message?.type === "download-voice"
+          ? () => handleDownloadVoiceMessage(message)
+          : message?.type === "download-clip"
+            ? () => handleDownloadClipMessage(message)
+            : null;
 
   if (!handler) {
     return false;
