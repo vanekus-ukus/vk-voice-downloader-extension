@@ -11,13 +11,32 @@
       <h1 class="popup__title">VK Voice &amp; Clips Downloader</h1>
       <section class="popup__card">
         <div class="popup__copy">
-          <strong>Скачивание</strong>
-          <span>Голосовые и клипы на vk.com</span>
+          <strong>Отдельные переключатели</strong>
+          <span>Управление голосовыми и клипами на vk.com</span>
         </div>
-        <label class="toggle" aria-label="Переключить расширение">
-          <input id="enabledToggle" type="checkbox">
-          <span class="toggle__slider"></span>
-        </label>
+      </section>
+      <section class="popup__card popup__card--stacked">
+        <div class="popup__row">
+          <div class="popup__copy">
+            <strong>Голосовые</strong>
+            <span>Кнопки у голосовых сообщений</span>
+          </div>
+          <label class="toggle" aria-label="Переключить голосовые сообщения">
+            <input id="voiceToggle" type="checkbox">
+            <span class="toggle__slider"></span>
+          </label>
+        </div>
+        <div class="popup__divider"></div>
+        <div class="popup__row">
+          <div class="popup__copy">
+            <strong>Клипы</strong>
+            <span>Кнопки на карточках VK Clips</span>
+          </div>
+          <label class="toggle" aria-label="Переключить клипы">
+            <input id="clipsToggle" type="checkbox">
+            <span class="toggle__slider"></span>
+          </label>
+        </div>
       </section>
       <p id="status" class="popup__status" aria-live="polite">Состояние загружается...</p>
     </main>

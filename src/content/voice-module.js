@@ -127,7 +127,7 @@
     }
 
     function injectDownloadButton(node) {
-      if (!shared.isEnabled() || !node || node.querySelector(SELECTORS.button)) {
+      if (!shared.isEnabled("voice") || !node || node.querySelector(SELECTORS.button)) {
         return;
       }
 
@@ -156,7 +156,7 @@
       }
 
       voiceObserver = new MutationObserver((mutations) => {
-        if (!shared.isEnabled()) {
+        if (!shared.isEnabled("voice")) {
           return;
         }
 
@@ -182,7 +182,7 @@
       start() {
         observeVoiceMessages();
 
-        if (shared.isEnabled()) {
+        if (shared.isEnabled("voice")) {
           processVoiceNodes(document);
         }
       },

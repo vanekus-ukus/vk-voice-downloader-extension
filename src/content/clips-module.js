@@ -190,7 +190,7 @@
     }
 
     function injectClipDownloadButton(node) {
-      if (!shared.isEnabled() || !node || node.querySelector(SELECTORS.button)) {
+      if (!shared.isEnabled("clips") || !node || node.querySelector(SELECTORS.button)) {
         return;
       }
 
@@ -218,7 +218,7 @@
       }
 
       clipObserver = new MutationObserver((mutations) => {
-        if (!shared.isEnabled()) {
+        if (!shared.isEnabled("clips")) {
           return;
         }
 
@@ -244,7 +244,7 @@
       start() {
         observeClipFeed();
 
-        if (shared.isEnabled()) {
+        if (shared.isEnabled("clips")) {
           processClipNodes(document);
         }
       },

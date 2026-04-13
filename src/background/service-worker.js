@@ -1,6 +1,10 @@
 const DEBUG = false;
 const LOG_PREFIX = "[VK Voice & Clips Downloader]";
-const STORAGE_KEY = "enabled";
+const STORAGE_KEYS = {
+  legacyEnabled: "enabled",
+  voiceEnabled: "enabledVoice",
+  clipsEnabled: "enabledClips"
+};
 
 function debug(...args) {
   if (!DEBUG) {
@@ -821,20 +825,38 @@ async function handleDownloadClipMessage(message) {
 }
 
 chrome.runtime.onInstalled.addListener(() => {
-  chrome.storage.local.get(STORAGE_KEY, (items) => {
-    if (chrome.runtime.lastError) {
-      error("Failed to initialize default settings.", chrome.runtime.lastError.message);
-      return;
-    }
+  chrome.storage.local.get(
+    {
+      [STORAGE_KEYS.legacyEnabled]: true,
+      [STORAGE_KEYS.voiceEnabled]: null,
+      [STORAGE_KEYS.clipsEnabled]: null
+    },
+    (items) => {
+      if (chrome.runtime.lastError) {
+        error("Failed to initialize default settings.", chrome.runtime.lastError.message);
+        return;
+      }
 
-    if (typeof items[STORAGE_KEY] === "undefined") {
-      chrome.storage.local.set({ [STORAGE_KEY]: true }, () => {
-        if (chrome.runtime.lastError) {
-          warn("Failed to persist default settings.", chrome.runtime.lastError.message);
-        }
-      });
+      const legacyEnabled = items[STORAGE_KEYS.legacyEnabled] !== false;
+      const patch = {};
+
+      if (typeof items[STORAGE_KEYS.voiceEnabled] !== "boolean") {
+        patch[STORAGE_KEYS.voiceEnabled] = legacyEnabled;
+      }
+
+      if (typeof items[STORAGE_KEYS.clipsEnabled] !== "boolean") {
+        patch[STORAGE_KEYS.clipsEnabled] = legacyEnabled;
+      }
+
+      if (Object.keys(patch).length > 0) {
+        chrome.storage.local.set(patch, () => {
+          if (chrome.runtime.lastError) {
+            warn("Failed to persist default settings.", chrome.runtime.lastError.message);
+          }
+        });
+      }
     }
-  });
+  );
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {

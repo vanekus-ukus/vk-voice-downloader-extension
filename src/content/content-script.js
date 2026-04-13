@@ -5,12 +5,19 @@
 
   const DEBUG = false;
   const LOG_PREFIX = "[VK Voice & Clips Downloader]";
-  const STORAGE_KEY = "enabled";
+  const STORAGE_KEYS = {
+    legacyEnabled: "enabled",
+    voiceEnabled: "enabledVoice",
+    clipsEnabled: "enabledClips"
+  };
   const ICON_URL = chrome.runtime.getURL("assets/ui/download-icon.svg");
 
   const moduleFactories = [];
   let activeModules = [];
-  let extensionEnabled = true;
+  let moduleStates = {
+    voice: true,
+    clips: true
+  };
   let started = false;
   let bootstrapped = false;
   let settingsInitialized = false;
@@ -167,12 +174,24 @@
     return icon;
   }
 
-  function applyEnabledState(nextState) {
-    extensionEnabled = Boolean(nextState);
+  function getNormalizedModuleStates(items) {
+    const legacyEnabled = items?.[STORAGE_KEYS.legacyEnabled] !== false;
+
+    return {
+      voice: typeof items?.[STORAGE_KEYS.voiceEnabled] === "boolean" ? items[STORAGE_KEYS.voiceEnabled] : legacyEnabled,
+      clips: typeof items?.[STORAGE_KEYS.clipsEnabled] === "boolean" ? items[STORAGE_KEYS.clipsEnabled] : legacyEnabled
+    };
+  }
+
+  function applyModuleStates(nextState) {
+    moduleStates = {
+      ...moduleStates,
+      ...nextState
+    };
 
     for (const module of activeModules) {
       try {
-        module.applyEnabledState?.(extensionEnabled);
+        module.applyEnabledState?.(Boolean(moduleStates[module.id]));
       } catch (err) {
         error(`Module "${module.id || "unknown"}" failed to apply enabled state.`, err);
       }
@@ -186,19 +205,65 @@
 
     settingsInitialized = true;
 
-    chrome.storage.local.get({ [STORAGE_KEY]: true }, (items) => {
-      if (chrome.runtime.lastError) {
-        error("Failed to read extension settings.", chrome.runtime.lastError.message);
-        applyEnabledState(true);
+    chrome.storage.local.get(
+      {
+        [STORAGE_KEYS.legacyEnabled]: true,
+        [STORAGE_KEYS.voiceEnabled]: null,
+        [STORAGE_KEYS.clipsEnabled]: null
+      },
+      (items) => {
+        if (chrome.runtime.lastError) {
+          error("Failed to read extension settings.", chrome.runtime.lastError.message);
+          applyModuleStates({ voice: true, clips: true });
+          return;
+        }
+
+        const normalizedState = getNormalizedModuleStates(items);
+        applyModuleStates(normalizedState);
+
+        const patch = {};
+
+        if (typeof items[STORAGE_KEYS.voiceEnabled] !== "boolean") {
+          patch[STORAGE_KEYS.voiceEnabled] = normalizedState.voice;
+        }
+
+        if (typeof items[STORAGE_KEYS.clipsEnabled] !== "boolean") {
+          patch[STORAGE_KEYS.clipsEnabled] = normalizedState.clips;
+        }
+
+        if (Object.keys(patch).length > 0) {
+          chrome.storage.local.set(patch, () => {
+            if (chrome.runtime.lastError) {
+              warn("Failed to persist normalized module settings.", chrome.runtime.lastError.message);
+            }
+          });
+        }
+      }
+    );
+
+    chrome.storage.onChanged.addListener((changes, areaName) => {
+      if (areaName !== "local") {
         return;
       }
 
-      applyEnabledState(items[STORAGE_KEY] !== false);
-    });
+      const nextState = {};
 
-    chrome.storage.onChanged.addListener((changes, areaName) => {
-      if (areaName === "local" && changes[STORAGE_KEY]) {
-        applyEnabledState(changes[STORAGE_KEY].newValue !== false);
+      if (changes[STORAGE_KEYS.voiceEnabled]) {
+        nextState.voice = changes[STORAGE_KEYS.voiceEnabled].newValue !== false;
+      }
+
+      if (changes[STORAGE_KEYS.clipsEnabled]) {
+        nextState.clips = changes[STORAGE_KEYS.clipsEnabled].newValue !== false;
+      }
+
+      if (Object.keys(nextState).length === 0 && changes[STORAGE_KEYS.legacyEnabled]) {
+        const legacyEnabled = changes[STORAGE_KEYS.legacyEnabled].newValue !== false;
+        nextState.voice = legacyEnabled;
+        nextState.clips = legacyEnabled;
+      }
+
+      if (Object.keys(nextState).length > 0) {
+        applyModuleStates(nextState);
       }
     });
   }
@@ -236,7 +301,7 @@
     constants: {
       DEBUG,
       LOG_PREFIX,
-      STORAGE_KEY,
+      STORAGE_KEYS,
       ICON_URL
     },
     debug,
@@ -254,7 +319,13 @@
     unmarkNode,
     setButtonBusy,
     createDownloadIcon,
-    isEnabled: () => extensionEnabled
+    isEnabled: (moduleId) => {
+      if (moduleId) {
+        return moduleStates[moduleId] !== false;
+      }
+
+      return Object.values(moduleStates).some(Boolean);
+    }
   };
 
   globalThis.VKVD = {
